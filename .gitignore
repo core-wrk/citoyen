@@ -1,0 +1,10 @@
+.env
+.env.local
+.vercel
+.local-usage.json
+node_modules/
+dist/
+supabase/.temp/
+.DS_Store
+.env*
+!.env.example
