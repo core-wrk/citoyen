@@ -1,59 +1,27 @@
-import {
-  progressRequestSchema,
-  parseSavedStudyData,
-} from "../shared/contracts.js";
+import { progressRequestSchema, parseSavedStudyData } from "../shared/contracts.js";
 import { requireStudyAccess } from "../server/access.js";
-import { databaseRequest } from "../server/supabase.js";
+import { database } from "../server/database.js";
 import { send, type ApiRequest, type ApiResponse } from "../server/http.js";
 
 export default async function handler(req: ApiRequest, res: ApiResponse) {
-  if (!["GET", "PUT"].includes(req.method || ""))
-    return send(res, 405, { error: "Method not allowed." });
+  if (!["GET", "PUT"].includes(req.method || "")) return send(res, 405, { error: "Method not allowed." });
   const user = await requireStudyAccess(req, res);
   if (!user) return;
   if (user.id === "local") return send(res, 200, { localOnly: true });
+  if (req.headers["x-citoyen-user"] !== user.id) return send(res, 409, { error: "Your account changed. Please reload the page." });
   try {
     if (req.method === "GET") {
-      const response = await databaseRequest(
-        `study_progress?select=data&user_id=eq.${encodeURIComponent(user.id)}`,
-        user.token,
-      );
-      if (!response.ok)
-        return send(res, 502, {
-          error: "Saved study progress could not be loaded.",
-        });
-      const rows = await response.json();
-      const value = rows[0]?.data;
-      return send(res, 200, {
-        data: value ? parseSavedStudyData(value) : null,
-      });
+      const result = await database().query("SELECT data FROM study_progress WHERE user_id = $1", [user.id]);
+      return send(res, 200, { data: result.rows[0] ? parseSavedStudyData(result.rows[0].data) : null });
     }
     const parsed = progressRequestSchema.safeParse(req.body);
-    if (!parsed.success || JSON.stringify(parsed.data).length > 200_000)
-      return send(res, 400, {
-        error: "The study record is invalid or too large.",
-      });
-    const response = await databaseRequest(
-      "study_progress?on_conflict=user_id",
-      user.token,
-      {
-        method: "POST",
-        headers: { prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({
-          user_id: user.id,
-          data: parsed.data.data,
-          updated_at: new Date().toISOString(),
-        }),
-      },
+    if (!parsed.success) return send(res, 400, { error: "The study record is invalid." });
+    await database().query(
+      "INSERT INTO study_progress (user_id, data, updated_at) VALUES ($1, $2, now()) ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at",
+      [user.id, JSON.stringify(parsed.data.data)],
     );
-    send(
-      res,
-      response.ok ? 200 : 502,
-      response.ok ? { saved: true } : { error: "Progress could not be saved." },
-    );
+    send(res, 200, { saved: true });
   } catch {
-    send(res, 502, {
-      error: "Study sync is unavailable. Your browser copy is still saved.",
-    });
+    send(res, 502, { error: "Study sync is unavailable. Your browser copy is still saved." });
   }
 }

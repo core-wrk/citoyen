@@ -1,4 +1,6 @@
-# Implement the accepted architecture
+# October 2026 implementation record
+
+This record documents the original implementation. See the [current architecture decision](architecture-decision.md) and [stack migration plan](stack-migration-plan.md) for the Neon, Render, Resend, and Better Auth setup.
 
 ## Goal
 

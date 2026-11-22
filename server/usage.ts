@@ -1,12 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { localMode } from "./access.js";
-import { databaseRequest } from "./supabase.js";
+import { database } from "./database.js";
 import { send, type ApiResponse } from "./http.js";
 
 const path = new URL("../.local-usage.json", import.meta.url);
 let localQueue: Promise<unknown> = Promise.resolve();
 export async function reserveMonthlyRequest(
-  user: { id: string; token: string },
+  user: { id: string },
   res: ApiResponse,
 ) {
   if (localMode() && user.id === "local") {
@@ -29,16 +29,15 @@ export async function reserveMonthlyRequest(
     if (await reservation) return true;
   } else {
     try {
-      const response = await databaseRequest(
-        "rpc/reserve_ai_request",
-        user.token,
-        { method: "POST", body: "{}" },
-      );
-      if (!response.ok) {
-        send(res, 503, { error: "Usage tracking is unavailable." });
-        return false;
-      }
-      if ((await response.json()) === true) return true;
+      const result = await database().query(`
+        INSERT INTO ai_monthly_usage (month_start, request_count)
+        VALUES (date_trunc('month', now() AT TIME ZONE 'UTC')::date, 1)
+        ON CONFLICT (month_start) DO UPDATE
+          SET request_count = ai_monthly_usage.request_count + 1
+          WHERE ai_monthly_usage.request_count < 100
+        RETURNING request_count
+      `);
+      if (result.rowCount) return true;
     } catch {
       send(res, 503, { error: "Usage tracking is unavailable." });
       return false;

@@ -1,0 +1,24 @@
+# Migrate Citoyen to Neon, Render, Resend, and Better Auth
+
+## Goal
+
+Run the existing private Citoyen study app on one Render web service at its default `onrender.com` address. Better Auth handles invited email-and-password accounts, Neon Postgres stores accounts and study progress, and Resend sends first-time password setup and recovery emails from `corewrk.com`.
+
+Start with an empty Neon database. Reinvite approved learners and start their hosted progress and monthly usage afresh. Leave old browser records on their original sites and devices. Keep all study modes, local practice, and optional OpenAI and Azure feedback.
+
+## Changes
+
+1. **Create the Neon schema.** Check in ordered SQL migrations for Better Auth, per-learner progress, and the shared monthly feedback counter. Replace Supabase’s REST calls and database policies with parameterized server queries through `pg`. Use the authenticated user ID for every progress query and give the app a database role with only the access it needs. Keep reservation of the 100 monthly feedback requests atomic. [Neon connections](https://neon.com/docs/connect/connect-from-any-app) · [Better Auth for PostgreSQL](https://better-auth.com/docs/adapters/postgresql)
+2. **Replace hosted sign-in.** Mount Better Auth under `/api/auth/*` in `server/index.ts` before JSON body parsing. Replace the browser’s Supabase session client with secure, same-site session cookies on Render. Disable public signup, provision approved learners through a server-only operator command, and check the session and invitation on each protected request. Reject cross-origin writes and preserve separate browser caches per account. [Better Auth integration](https://better-auth.com/docs/integrations/express) · [Better Auth security](https://better-auth.com/docs/reference/security)
+3. **Send account emails through Resend.** Verify `corewrk.com` and use `citoyen@corewrk.com` as the proposed sender. Let an invited learner set their first password via a one-use link to the Render app. Use the same token flow for recovery. Rate-limit sign-in and recovery and use generic recovery responses. [Better Auth email and password](https://better-auth.com/docs/authentication/email-password) · [Resend domain verification](https://resend.com/docs/dashboard/domains/introduction)
+4. **Prepare Render.** Serve the Vite build and API from the existing Node service on one origin. Bind to `0.0.0.0` and Render’s `PORT`, supply a health endpoint, and keep runtime dependencies installable for `npm start`. Store secrets in Render and use the exact HTTPS `onrender.com` URL for Better Auth and email links. Apply schema changes through a separate controlled migration step before serving traffic. [Render web services](https://render.com/docs/web-services) · [Render health checks](https://render.com/docs/health-checks)
+5. **Test access and study behavior.** Exercise two synthetic invited accounts, account switching, progress sync, expired and reused email links, rejected signup and unauthorized requests, and the shared request limit. Align the progress API’s size limit with the saved-data rules so the valid long-answer snapshot from the [previous launch review](launch-review.md) syncs. Check browser recording, French playback, and consented feedback on Mac and physical iPhone.
+6. **Launch with approval.** Get approval before implementing the auth changes and before deployment. After independent review and staging checks, provision fresh production accounts and share the new address with approved learners. Keep the previous database and deployment available during the verification window if they exist. If launch fails, pause use of the Render address and preserve any new Neon writes before redirecting learners back. Remove legacy code, deployment configuration, and environment variables in the migration. Retire provider resources only after approval.
+
+## Done when
+
+- `npm run verify` passes, and the built app starts on Render with a healthy HTTP check.
+- Invited learners can receive setup and recovery mail, set a password, sign in, and sign out on the default HTTPS Render address. Anonymous and uninvited users cannot access study or feedback APIs. One learner cannot read or overwrite another’s progress.
+- New learners see empty hosted progress. A saved attempt and a long written draft sync between Mac and iPhone for the same account. Local practice and prior browser records still work where they were saved.
+- The 100th monthly feedback reservation succeeds and the 101st is rejected, including under concurrent requests at the limit. Study and recording flows pass on Mac and physical iPhone.
+- Hosted Citoyen serves successfully with the Neon, Resend, and Better Auth settings. Optional feedback degrades to self-review when provider keys are absent. The README reflects the verified setup commands and environment variables.

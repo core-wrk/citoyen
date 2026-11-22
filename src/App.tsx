@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
+type Session = { user: { id: string; email: string } };
 import type { Page } from "../shared/contracts";
 import { ApiClient } from "./lib/client";
 import { useProgress } from "./hooks/useProgress";
@@ -13,14 +13,17 @@ import { ErrorNotice, Heading } from "./components/ui";
 function SignIn({
   client,
   onClose,
+  onSignIn,
 }: {
   client: ApiClient;
   onClose?: () => void;
+  onSignIn?: () => void;
 }) {
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [message, setMessage] = useState("");
   return (
     <section className="content-panel login-panel">
       <div className="eyebrow">CITOYEN · PRIVATE STUDY</div>
@@ -34,6 +37,7 @@ function SignIn({
           setError("");
           try {
             await client.signIn(email, password);
+            onSignIn?.();
             onClose?.();
           } catch (e) {
             setError((e as Error).message);
@@ -69,6 +73,15 @@ function SignIn({
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
+      <button className="text-button" disabled={busy} onClick={async () => {
+        if (!email) { setError("Enter your email address first."); return; }
+        setBusy(true);
+        setError("");
+        const result = await client.auth!.requestPasswordReset({ email, redirectTo: "/?reset-password=1" });
+        setMessage(result.error ? "Password recovery is temporarily unavailable." : "If this account is invited, check your email for a password link.");
+        setBusy(false);
+      }}>Set or reset password</button>
+      {message && <p role="status">{message}</p>}
       {onClose && (
         <button className="text-button" onClick={onClose}>
           Continue local study
@@ -76,6 +89,25 @@ function SignIn({
       )}
     </section>
   );
+}
+function ResetPassword({ client }: { client: ApiClient }) {
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const params = new URLSearchParams(window.location.search);
+  return <main className="standalone"><section className="content-panel login-panel">
+    <h1>Set your password</h1>
+    {params.has("error") ? <p>This password link is invalid or expired. Request another from the sign-in screen.</p> :
+      <form className="login-form" onSubmit={async (event) => {
+        event.preventDefault();
+        const result = await client.auth!.resetPassword({ newPassword: password, token: params.get("token") || "" });
+        setMessage(result.error ? "This password link is invalid or expired. Request another link." : "Your password is set. You can sign in now.");
+      }}>
+        <label>New password<input className="login-input" type="password" autoComplete="new-password" minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+        <button className="primary-button">Set password</button>
+      </form>}
+    {message && <p role="status">{message}</p>}
+    <a href="/">Return to sign in</a>
+  </section></main>;
 }
 function StudyApp({
   client,
@@ -89,12 +121,13 @@ function StudyApp({
     [modal, setModal] = useState<"help" | "account" | null>(null),
     [error, setError] = useState("");
   async function signOut() {
-    const { error } = await client.auth!.auth.signOut({ scope: "local" });
+    const { error } = await client.auth!.signOut();
     if (error) {
       setError("Sign-out could not finish. Try again when connected.");
       return;
     }
-    setModal(null);
+    try { localStorage.setItem("citoyen.account-change", crypto.randomUUID()); } catch {}
+    window.location.reload();
   }
   if (!progress.ready)
     return (
@@ -281,7 +314,7 @@ function StudyApp({
                 <ErrorNotice message={error} />
               </>
             ) : client.auth ? (
-              <SignIn client={client} onClose={() => setModal(null)} />
+              <SignIn client={client} onClose={() => window.location.reload()} />
             ) : (
               <>
                 <h2>Your study stays here.</h2>
@@ -301,29 +334,36 @@ function StudyApp({
     </>
   );
 }
-export function App({ client }: { client: ApiClient }) {
-  const [session, setSession] = useState<Session | null>(null),
-    [loading, setLoading] = useState(Boolean(client.auth));
+function HostedApp({ client }: { client: ApiClient }) {
+  const sessionState = client.auth!.useSession();
+  const [checking, setChecking] = useState(false);
   useEffect(() => {
-    if (!client.auth) return;
     let active = true;
-    const subscription = client.auth.auth.onAuthStateChange((_event, next) => {
-      if (active) {
-        setSession(next);
-        setLoading(false);
-      }
-    });
-    client.auth.auth.getSession().then(({ data }) => {
-      if (active) {
-        setSession(data.session);
-        setLoading(false);
-      }
-    });
+    const refresh = () => {
+      setChecking(true);
+      void sessionState.refetch().finally(() => { if (active) setChecking(false); });
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "citoyen.account-change" || event.key === "better-auth.message") refresh();
+    };
+    const onFocus = () => { if (document.visibilityState === "visible") refresh(); };
+    window.addEventListener("storage", onStorage);
+    document.addEventListener("visibilitychange", onFocus);
     return () => {
       active = false;
-      subscription.data.subscription.unsubscribe();
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onFocus);
     };
   }, [client]);
+  if (checking || sessionState.isPending || sessionState.isRefetching)
+    return <main className="standalone" role="status">Checking your session…</main>;
+  const session = sessionState.error ? null : sessionState.data;
+  if (!session && !client.config.localMode)
+    return <main className="standalone"><SignIn client={client} /></main>;
+  return <StudyApp key={session?.user.id || "local"} client={client} session={session} />;
+}
+
+export function App({ client }: { client: ApiClient }) {
   if (!client.config.appReady)
     return (
       <main className="standalone">
@@ -335,23 +375,9 @@ export function App({ client }: { client: ApiClient }) {
         </Heading>
       </main>
     );
-  if (loading)
-    return (
-      <main className="standalone" role="status">
-        Checking your session…
-      </main>
-    );
-  if (!session && !client.config.localMode)
-    return (
-      <main className="standalone">
-        <SignIn client={client} />
-      </main>
-    );
-  return (
-    <StudyApp
-      key={session?.user.id || "local"}
-      client={client}
-      session={session}
-    />
-  );
+  if (client.auth && new URLSearchParams(window.location.search).has("reset-password"))
+    return <ResetPassword client={client} />;
+  if (client.auth) return <HostedApp client={client} />;
+  if (!client.config.localMode) return <main className="standalone"><SignIn client={client} /></main>;
+  return <StudyApp key="local" client={client} session={null} />;
 }

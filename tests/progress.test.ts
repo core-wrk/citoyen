@@ -10,7 +10,6 @@ import {
 } from "../src/lib/progress";
 import { ApiClient } from "../src/lib/client";
 import { useProgress } from "../src/hooks/useProgress";
-import type { SupabaseClient } from "@supabase/supabase-js";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
@@ -21,7 +20,6 @@ const config: AppConfig = {
   speechConfigured: false,
   languageFeedbackConfigured: false,
   monthlyRequestAllowance: 100,
-  supabase: null,
 };
 const data = (text: string, date = "2026-10-14T12:00:00.000Z"): StudyData => ({
   ...emptyData(),
@@ -102,28 +100,12 @@ test("sync retains attempts from both devices and chooses the latest draft snaps
   expect(result.attempts.map((a) => a.id)).toEqual(["b", "a"]);
 });
 
-test("a delayed request from the previous account cannot send its data with the new account token", async () => {
-  const client = new ApiClient(config),
-    network = vi.spyOn(globalThis, "fetch");
-  Object.defineProperty(client, "auth", {
-    value: {
-      auth: {
-        getSession: async () => ({
-          data: {
-            session: { user: { id: "brother" }, access_token: "brother-token" },
-          },
-        }),
-      },
-    } as unknown as SupabaseClient,
-  });
-  await expect(
-    client.request(
-      "/api/progress",
-      { method: "PUT", body: JSON.stringify({ data: data("owner draft") }) },
-      "owner",
-    ),
-  ).rejects.toThrow("account changed");
-  expect(network).not.toHaveBeenCalled();
+test("a delayed progress write identifies the account that created it", async () => {
+  const client = new ApiClient(config);
+  const network = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ error: "Your account changed." }, { status: 409 }));
+  await expect(client.request("/api/progress", { method: "PUT", body: JSON.stringify({ data: data("owner draft") }) }, "owner")).rejects.toThrow("account changed");
+  expect(network.mock.calls[0][1]?.headers).toMatchObject({ "x-citoyen-user": "owner" });
+  network.mockRestore();
 });
 
 test("failed cloud loading never overwrites cloud records with the stale browser copy", async () => {

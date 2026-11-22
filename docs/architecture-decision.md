@@ -1,31 +1,19 @@
-# Architecture decision: structured app with a managed backend
+# Architecture decision for the Citoyen migration
 
-Status: accepted by Andrew on 14 October 2026.
+The target stack is selected. The [migration plan](stack-migration-plan.md) is pending implementation. The [October implementation record](implementation-plan.md) describes the current Supabase and Vercel setup.
 
-Citoyen starts as a private study app for Andrew, then two relatives. It may become a paid French exam preparation platform. The immediate requirements are civic quizzes, listening and reading, written and spoken answers, optional automated feedback, and private progress across Mac and iPhone browsers.
+Citoyen is a private study app for civic quizzes, listening and reading, written and spoken answers, optional automated feedback, and progress across Mac and iPhone browsers.
 
 ## Decision
 
-Use React, Vite and TypeScript for the frontend. Use shared validation for saved study data and API requests, and keep API handlers small with provider code in focused server modules. Retain Supabase Auth and PostgreSQL for invited accounts and private progress, and Vercel for the static frontend and short API requests. Keep the API under the frontend's origin. Keep SQL changes as ordered, versioned migrations in this repository.
+Keep React, Vite, TypeScript, and shared validation for saved data and API requests. Run the Node server on Render at its default HTTPS address. Serve the frontend and API on the same origin so the browser can use the same-site Better Auth session cookie on desktop and iPhone. [Render web services](https://render.com/docs/web-services) · [Better Auth security](https://better-auth.com/docs/reference/security)
 
-Learners sign in to Citoyen; they do not need hosting-provider accounts. Public signup is disabled for the private version. Server authorization and database row policies protect each learner's records. Hosted study screens require sign-in. Local personal study remains available without cloud credentials.
+Better Auth manages invited accounts and email-and-password sessions. Resend delivers password setup and recovery mail from `corewrk.com`. Neon Postgres stores Better Auth tables, study progress, and monthly request usage. The Node server checks the session and invitation before protected operations and uses the session’s user ID for progress queries. Database credentials stay on the server, and ordered SQL migrations live in this repository. [Better Auth PostgreSQL adapter](https://better-auth.com/docs/adapters/postgresql) · [Resend sender domains](https://resend.com/docs/dashboard/domains/introduction)
 
-## Reasons
+## Launch state
 
-Managed authentication and PostgreSQL cover the current data and account requirements while reducing service maintenance. The existing audio flow streams directly from the browser to Azure after consent; the API supplies a temporary token, rather than keeping a server running for the recording. Text feedback and progress requests also fit short API calls.
-
-React components and TypeScript provide useful boundaries for the existing interactive study modes. Shared validation and migrations improve correctness as the curriculum and saved data evolve. These advantages do not require moving authentication to Better Auth, the database to Neon, or the API to a persistent Render server.
-
-## Alternatives and tradeoffs
-
-The local app-template's full React/Vite + Hono + Better Auth + Drizzle/Neon + Cloudflare Pages/Render stack offers stronger infrastructure portability and consistent tooling across Core Wrk products. It also adds a separately operated API and authentication implementation. Its separate default frontend/API domains require a shared domain or proxy for cookie-based sign-in on Safari. Those costs are not justified by this app's current requirements.
-
-Supabase-specific authentication and row policies make a future backend migration more involved. Provider calls will stay in focused modules. Vercel is a practical hosting choice, not a requirement imposed by React or Supabase. Paid commercial hosting and appropriate availability tiers will be selected before selling the product.
+Render starts with a fresh Neon database and newly provisioned learner accounts. Browser storage belongs to the site address where it was saved, so existing browser copies remain on their original sites. Learners start with empty progress on Render. Public signup stays disabled and local personal study remains available without cloud credentials.
 
 ## Boundaries
 
-Raw recordings remain in the page unless the learner explicitly opts into speech assessment. Payments, subscriptions, stored recordings, background processing, commercial admin tools and generalized storage adapters are deferred until requested. Reconsider the backend when measured workload requires long-running jobs, authentication ownership, or a demonstrated hosting constraint.
-
-## Acceptance
-
-All existing study modes work. Accounts cannot merge another account's local history. Invited users can sign in, sign out and recover progress on another device. Recording controls release the microphone on navigation. `npm run verify` runs real TypeScript checks, tests and a production frontend build. Physical iPhone audio and hosted authentication remain required checks before launch.
+Raw recordings stay in the browser unless a learner explicitly opts into Azure speech assessment. The API supplies a temporary Azure token, and requested text feedback still goes to OpenAI. Payments, subscriptions, stored recordings, background jobs, and commercial admin tools are outside the migration scope.

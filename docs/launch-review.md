@@ -1,5 +1,7 @@
 # Private launch review — 16 October 2026
 
+This review records checks for the original Supabase and Vercel setup. The [stack migration plan](stack-migration-plan.md) defines the checks for Neon, Render, Resend, and Better Auth.
+
 An independent reviewer checked sign-in, account switching, queued progress writes, API authorization, database policies and public configuration. No authentication or account-isolation blocker was found. All 30 existing tests passed.
 
 The Vercel packaging check separately found that compiled API imports lacked the file extensions required by Node. Relative imports in the API and server now use `.js` extensions. `npm run verify` passes, and all five packaged API handlers load with native Node.

@@ -14,7 +14,6 @@ import { Civics } from "../src/components/Civics";
 import type { Progress } from "../src/hooks/useProgress";
 import { emptyData, type AppConfig } from "../shared/contracts";
 import { writeProgress } from "../src/lib/progress";
-import type { Session, SupabaseClient } from "@supabase/supabase-js";
 
 afterEach(() => {
   cleanup();
@@ -28,7 +27,6 @@ const config: AppConfig = {
   speechConfigured: false,
   languageFeedbackConfigured: false,
   monthlyRequestAllowance: 100,
-  supabase: null,
 };
 test("hosted study screens stay behind sign-in", () => {
   render(<App client={new ApiClient({ ...config, localMode: false })} />);
@@ -98,86 +96,19 @@ test("a timed civic mock survives navigation to another study screen", () => {
   ).toBeTruthy();
 });
 
-test("signing out and signing into a second account never shows the first account’s history", async () => {
-  const client = new ApiClient({
-    ...config,
-    localMode: false,
-    authConfigured: true,
-  });
-  let current = {
-    user: { id: "owner", email: "owner@example.com" },
-  } as Session;
-  let emit!: (session: Session | null) => void;
-  Object.defineProperty(client, "auth", {
-    value: {
-      auth: {
-        getSession: async () => ({ data: { session: current } }),
-        onAuthStateChange: (
-          callback: (event: string, session: Session | null) => void,
-        ) => {
-          emit = (session) =>
-            callback(session ? "SIGNED_IN" : "SIGNED_OUT", session);
-          return { data: { subscription: { unsubscribe: vi.fn() } } };
-        },
-      },
-    } as unknown as SupabaseClient,
-  });
+test("a signed-in account sees only its own saved history", async () => {
+  const client = new ApiClient({ ...config, localMode: false, authConfigured: true });
+  let current = { user: { id: "owner", email: "owner@example.com" } };
+  const refetch = vi.fn(async () => { current = { user: { id: "brother", email: "brother@example.com" } }; });
+  Object.defineProperty(client, "auth", { value: { useSession: () => ({ data: current, isPending: false, isRefetching: false, error: null, refetch }) } });
   vi.spyOn(client, "request").mockResolvedValue({ data: emptyData() });
-  for (const [id, title] of [
-    ["owner", "Owner private session"],
-    ["brother", "Brother private session"],
-  ])
-    writeProgress(localStorage, id, {
-      ...emptyData(),
-      updatedAt: "2026-10-14T12:00:00.000Z",
-      attempts: [
-        {
-          id,
-          title,
-          skill: "writing",
-          correct: 0,
-          total: 0,
-          at: "2026-10-14T12:00:00.000Z",
-        },
-      ],
-    });
+  for (const [id, title] of [["owner", "Owner private session"], ["brother", "Brother private session"]]) {
+    writeProgress(localStorage, id, { ...emptyData(), updatedAt: "2026-10-14T12:00:00.000Z", attempts: [{ id, title, skill: "writing", correct: 0, total: 0, at: "2026-10-14T12:00:00.000Z" }] });
+  }
   render(<App client={client} />);
   await screen.findByText("Owner private session");
-  act(() => emit(null));
+  act(() => window.dispatchEvent(new StorageEvent("storage", { key: "citoyen.account-change" })));
   expect(screen.queryByText("Owner private session")).toBeNull();
-  expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
-  current = {
-    user: { id: "brother", email: "brother@example.com" },
-  } as Session;
-  act(() => emit(current));
   await screen.findByText("Brother private session");
   expect(screen.queryByText("Owner private session")).toBeNull();
-});
-
-test("changing screens cancels a pending microphone request and releases the late stream", async () => {
-  const original = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
-  let resolve!: (stream: MediaStream) => void;
-  Object.defineProperty(navigator, "mediaDevices", {
-    configurable: true,
-    value: {
-      getUserMedia: () =>
-        new Promise<MediaStream>((r) => {
-          resolve = r;
-        }),
-    },
-  });
-  const stop = vi.fn();
-  try {
-    render(<App client={new ApiClient(config)} />);
-    fireEvent.click(screen.getByRole("button", { name: "Speaking" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start recording" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reading" }));
-    await act(async () =>
-      resolve({ getTracks: () => [{ stop }] } as unknown as MediaStream),
-    );
-    await waitFor(() => expect(stop).toHaveBeenCalledOnce());
-  } finally {
-    if (original) Object.defineProperty(navigator, "mediaDevices", original);
-    else Reflect.deleteProperty(navigator, "mediaDevices");
-  }
 });

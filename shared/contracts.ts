@@ -86,7 +86,6 @@ export interface AppConfig {
   speechConfigured: boolean;
   languageFeedbackConfigured: boolean;
   monthlyRequestAllowance: number;
-  supabase: { url: string; publicKey: string } | null;
 }
 export interface Question {
   id: string;
